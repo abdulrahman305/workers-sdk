@@ -12,6 +12,7 @@ import {
 } from "../deployment-bundle/bundle-reporter";
 import { getBundleType } from "../deployment-bundle/bundle-type";
 import { createWorkerUploadForm } from "../deployment-bundle/create-worker-upload-form";
+import { logBuildOutput } from "../deployment-bundle/esbuild-plugins/log-build-output";
 import {
 	findAdditionalModules,
 	writeAdditionalModules,
@@ -20,9 +21,8 @@ import {
 	createModuleCollector,
 	getWrangler1xLegacyModuleReferences,
 } from "../deployment-bundle/module-collection";
-import { validateNodeCompat } from "../deployment-bundle/node-compat";
+import { getNodeCompatMode } from "../deployment-bundle/node-compat";
 import { loadSourceMaps } from "../deployment-bundle/source-maps";
-import { addHyphens } from "../deployments";
 import { confirm } from "../dialogs";
 import { getMigrationsToUpload } from "../durable";
 import { UserError } from "../errors";
@@ -30,7 +30,7 @@ import { syncExperimentalAssets } from "../experimental-assets";
 import { logger } from "../logger";
 import { getMetricsUsageHeaders } from "../metrics";
 import { isNavigatorDefined } from "../navigator-user-agent";
-import { APIError, ParseError } from "../parse";
+import { APIError, ParseError, parseNonHyphenedUuid } from "../parse";
 import { getWranglerTmpDir } from "../paths";
 import {
 	ensureQueuesExistByConfig,
@@ -46,13 +46,12 @@ import {
 	maybeRetrieveFileSourceMap,
 } from "../sourcemap";
 import triggersDeploy from "../triggers/deploy";
-import { logVersionIdChange } from "../utils/deployment-id-version-id-change";
+import { patchNonVersionedScriptSettings } from "../versions/api";
 import { confirmLatestDeploymentOverwrite } from "../versions/deploy";
 import { getZoneForRoute } from "../zones";
 import type { Config } from "../config";
 import type {
 	CustomDomainRoute,
-	ExperimentalAssets,
 	Route,
 	Rule,
 	ZoneIdRoute,
@@ -64,9 +63,11 @@ import type {
 	CfPlacement,
 	CfWorkerInit,
 } from "../deployment-bundle/worker";
+import type { ExperimentalAssetsOptions } from "../experimental-assets";
 import type { PostQueueBody, PostTypedConsumerBody } from "../queues/client";
 import type { LegacyAssetPaths } from "../sites";
 import type { RetrieveSourceMapFunction } from "../sourcemap";
+import type { ApiVersion } from "../versions/types";
 
 type Props = {
 	config: Config;
@@ -78,7 +79,7 @@ type Props = {
 	compatibilityDate: string | undefined;
 	compatibilityFlags: string[] | undefined;
 	legacyAssetPaths: LegacyAssetPaths | undefined;
-	experimentalAssets: ExperimentalAssets | undefined;
+	experimentalAssetsOptions: ExperimentalAssetsOptions | undefined;
 	vars: Record<string, string> | undefined;
 	defines: Record<string, string> | undefined;
 	alias: Record<string, string> | undefined;
@@ -310,13 +311,16 @@ Update them to point to this script instead?`;
 
 export default async function deploy(props: Props): Promise<{
 	sourceMapSize?: number;
-	deploymentId: string | null;
+	versionId: string | null;
 	workerTag: string | null;
+	targets?: string[];
 }> {
 	// TODO: warn if git/hg has uncommitted changes
 	const { config, accountId, name } = props;
 	let workerTag: string | null = null;
-	let deploymentId: string | null = null;
+	let versionId: string | null = null;
+
+	let workerExists: boolean = true;
 
 	if (!props.dispatchNamespace && accountId && name) {
 		try {
@@ -338,14 +342,14 @@ export default async function deploy(props: Props): Promise<{
 					`You are about to publish a Workers Service that was last published via the Cloudflare Dashboard.\nEdits that have been made via the dashboard will be overridden by your local code and config.`
 				);
 				if (!(await confirm("Would you like to continue?"))) {
-					return { deploymentId, workerTag };
+					return { versionId, workerTag };
 				}
 			} else if (script.last_deployed_from === "api") {
 				logger.warn(
 					`You are about to publish a Workers Service that was last updated via the script API.\nEdits that have been made via the script API will be overridden by your local code and config.`
 				);
 				if (!(await confirm("Would you like to continue?"))) {
-					return { deploymentId, workerTag };
+					return { versionId, workerTag };
 				}
 			}
 		} catch (e) {
@@ -353,6 +357,8 @@ export default async function deploy(props: Props): Promise<{
 			// is thrown from the above fetchResult on the first deploy of a Worker
 			if ((e as { code?: number }).code !== 10090) {
 				throw e;
+			} else {
+				workerExists = false;
 			}
 		}
 	}
@@ -395,13 +401,12 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	const minify = props.minify ?? config.minify;
 
-	const nodejsCompatMode = validateNodeCompat({
-		legacyNodeCompat: props.nodeCompat ?? config.node_compat ?? false,
-		compatibilityFlags: props.compatibilityFlags ?? config.compatibility_flags,
-		noBundle: props.noBundle ?? config.no_bundle ?? false,
-	});
 	const compatibilityFlags =
 		props.compatibilityFlags ?? config.compatibility_flags;
+	const nodejsCompatMode = getNodeCompatMode(compatibilityFlags, {
+		nodeCompat: props.nodeCompat ?? config.node_compat,
+		noBundle: props.noBundle ?? config.no_bundle,
+	});
 
 	// Warn if user tries minify with no-bundle
 	if (props.noBundle && minify) {
@@ -453,7 +458,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 		const yes = await confirmLatestDeploymentOverwrite(accountId, scriptName);
 		if (!yes) {
 			cancel("Aborting deploy...");
-			return { deploymentId, workerTag };
+			return { versionId, workerTag };
 		}
 	}
 
@@ -554,21 +559,9 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 							props.compatibilityDate ?? config.compatibility_date,
 							props.compatibilityFlags ?? config.compatibility_flags
 						),
+						plugins: [logBuildOutput(nodejsCompatMode)],
 					}
 				);
-
-		// Add modules to dependencies for size warning
-		for (const module of modules) {
-			const modulePath =
-				module.filePath === undefined
-					? module.name
-					: path.relative("", module.filePath);
-			const bytesInOutput =
-				typeof module.content === "string"
-					? Buffer.byteLength(module.content)
-					: module.content.byteLength;
-			dependencies[modulePath] = { bytesInOutput };
-		}
 
 		// Add modules to dependencies for size warning
 		for (const module of modules) {
@@ -598,13 +591,16 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			: undefined;
 
 		// Upload assets if experimental assets is being used
-		const experimentalAssetsJwt: CfWorkerInit["experimental_assets_jwt"] =
-			props.experimentalAssets && !props.dryRun
-				? await syncExperimentalAssets(
-						accountId,
-						scriptName,
-						props.experimentalAssets.directory
-					)
+		const experimentalAssetsOptions =
+			props.experimentalAssetsOptions && !props.dryRun
+				? {
+						routingConfig: props.experimentalAssetsOptions?.routingConfig,
+						jwt: await syncExperimentalAssets(
+							accountId,
+							scriptName,
+							props.experimentalAssetsOptions.directory
+						),
+					}
 				: undefined;
 
 		const legacyAssets = await syncLegacyAssets(
@@ -700,7 +696,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			placement,
 			tail_consumers: config.tail_consumers,
 			limits: config.limits,
-			experimental_assets_jwt: experimentalAssetsJwt,
+			experimental_assets: experimentalAssetsOptions,
 		};
 
 		sourceMapSize = worker.sourceMaps?.reduce(
@@ -730,43 +726,125 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			}
 		}
 
+		// We can use the new versions/deployments APIs if we:
+		// * have --x-versions enabled (default, but can be disabled with --no-x-versions)
+		// * are uploading a worker that already exists
+		// * aren't a dispatch namespace deploy
+		// * aren't a service env deploy
+		// * aren't a service Worker
+		// * we don't have DO migrations
+		// * we aren't an fpw
+		const canUseNewVersionsDeploymentsApi =
+			props.experimentalVersions &&
+			workerExists &&
+			props.dispatchNamespace === undefined &&
+			prod &&
+			format === "modules" &&
+			migrations === undefined &&
+			!config.first_party_worker;
+
 		if (props.dryRun) {
 			printBindings({ ...withoutStaticAssets, vars: maskedVars });
 		} else {
+			assert(accountId, "Missing accountId");
+
 			await ensureQueuesExistByConfig(config);
 			let bindingsPrinted = false;
 
 			// Upload the script so it has time to propagate.
 			// We can also now tell whether available_on_subdomain is set
 			try {
-				const result = await fetchResult<{
+				let result: {
 					available_on_subdomain: boolean;
 					id: string | null;
 					etag: string | null;
 					pipeline_hash: string | null;
 					mutable_pipeline_id: string | null;
 					deployment_id: string | null;
-					startup_time_ms: number;
-				}>(
-					workerUrl,
-					{
-						method: "PUT",
-						body: createWorkerUploadForm(worker),
-						headers: await getMetricsUsageHeaders(config.send_metrics),
-					},
-					new URLSearchParams({
-						include_subdomain_availability: "true",
-						// pass excludeScript so the whole body of the
-						// script doesn't get included in the response
-						excludeScript: "true",
-					})
-				);
+					startup_time_ms?: number;
+				};
 
-				logger.log("Worker Startup Time:", result.startup_time_ms, "ms");
+				// If we're using the new APIs, first upload the version
+				if (canUseNewVersionsDeploymentsApi) {
+					// Upload new version
+					const versionResult = await fetchResult<ApiVersion>(
+						`/accounts/${accountId}/workers/scripts/${scriptName}/versions`,
+						{
+							method: "POST",
+							body: createWorkerUploadForm(worker),
+							headers: await getMetricsUsageHeaders(config.send_metrics),
+						}
+					);
+
+					// Deploy new version to 100%
+					await fetchResult(
+						`/accounts/${accountId}/workers/scripts/${scriptName}/deployments`,
+						{
+							method: "POST",
+							body: JSON.stringify({
+								stratergy: "percentage",
+								versions: [
+									{
+										percentage: 100,
+										version_id: versionResult.id,
+									},
+								],
+							}),
+							headers: await getMetricsUsageHeaders(config.send_metrics),
+						}
+					);
+
+					// Update tail consumers and logpush settings
+					await patchNonVersionedScriptSettings(accountId, scriptName, {
+						tail_consumers: worker.tail_consumers,
+						logpush: worker.logpush,
+					});
+
+					const { available_on_subdomain } = await fetchResult<{
+						available_on_subdomain: boolean;
+					}>(`/accounts/${accountId}/workers/scripts/${scriptName}/subdomain`);
+
+					result = {
+						available_on_subdomain,
+						id: null, // fpw - ignore
+						etag: versionResult.resources.script.etag,
+						pipeline_hash: null, // fpw - ignore
+						mutable_pipeline_id: null, // fpw - ignore
+						deployment_id: versionResult.id, // version id not deployment id but easier to adapt here
+						startup_time_ms: versionResult.startup_time_ms,
+					};
+				} else {
+					result = await fetchResult<{
+						available_on_subdomain: boolean;
+						id: string | null;
+						etag: string | null;
+						pipeline_hash: string | null;
+						mutable_pipeline_id: string | null;
+						deployment_id: string | null;
+						startup_time_ms: number;
+					}>(
+						workerUrl,
+						{
+							method: "PUT",
+							body: createWorkerUploadForm(worker),
+							headers: await getMetricsUsageHeaders(config.send_metrics),
+						},
+						new URLSearchParams({
+							include_subdomain_availability: "true",
+							// pass excludeScript so the whole body of the
+							// script doesn't get included in the response
+							excludeScript: "true",
+						})
+					);
+				}
+
+				if (result.startup_time_ms) {
+					logger.log("Worker Startup Time:", result.startup_time_ms, "ms");
+				}
 				bindingsPrinted = true;
 				printBindings({ ...withoutStaticAssets, vars: maskedVars });
 
-				deploymentId = addHyphens(result.deployment_id) ?? result.deployment_id;
+				versionId = parseNonHyphenedUuid(result.deployment_id);
 
 				if (config.first_party_worker) {
 					// Print some useful information returned after publishing
@@ -851,9 +929,8 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	if (props.dryRun) {
 		logger.log(`--dry-run: exiting now.`);
-		return { deploymentId, workerTag };
+		return { versionId, workerTag };
 	}
-	assert(accountId, "Missing accountId");
 
 	const uploadMs = Date.now() - start;
 
@@ -861,31 +938,30 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	// Early exit for WfP since it doesn't need the below code
 	if (props.dispatchNamespace !== undefined) {
-		deployWfpUserWorker(props.dispatchNamespace, deploymentId);
-		return { deploymentId, workerTag };
+		deployWfpUserWorker(props.dispatchNamespace, versionId);
+		return { versionId, workerTag };
 	}
 
 	// deploy triggers
-	await triggersDeploy(props);
+	const targets = await triggersDeploy(props);
 
-	logger.log("Current Deployment ID:", deploymentId);
-	logger.log("Current Version ID:", deploymentId);
+	logger.log("Current Version ID:", versionId);
 
-	logVersionIdChange();
-
-	return { sourceMapSize, deploymentId, workerTag };
+	return {
+		sourceMapSize,
+		versionId,
+		workerTag,
+		targets: targets ?? [],
+	};
 }
 
 function deployWfpUserWorker(
 	dispatchNamespace: string,
-	deploymentId: string | null
+	versionId: string | null
 ) {
 	// Will go under the "Uploaded" text
 	logger.log("  Dispatch Namespace:", dispatchNamespace);
-	logger.log("Current Deployment ID:", deploymentId);
-	logger.log("Current Version ID:", deploymentId);
-
-	logVersionIdChange();
+	logger.log("Current Version ID:", versionId);
 }
 
 export function helpIfErrorIsSizeOrScriptStartup(

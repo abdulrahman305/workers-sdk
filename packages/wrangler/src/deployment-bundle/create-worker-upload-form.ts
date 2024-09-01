@@ -172,14 +172,14 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 		tail_consumers,
 		limits,
 		annotations,
-		experimental_assets_jwt,
+		experimental_assets,
 	} = worker;
 
 	// short circuit if static assets upload only
-	if (main.name === "no-op-assets-worker.js" && experimental_assets_jwt) {
+	if (experimental_assets && !experimental_assets.routingConfig.hasUserWorker) {
 		formData.set(
 			"metadata",
-			JSON.stringify({ assets: experimental_assets_jwt })
+			JSON.stringify({ assets: experimental_assets.jwt })
 		);
 		return formData;
 	}
@@ -545,7 +545,9 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 			: { body_part: main.name }),
 		bindings: metadataBindings,
 		...(compatibility_date && { compatibility_date }),
-		...(compatibility_flags && { compatibility_flags }),
+		...(compatibility_flags && {
+			compatibility_flags,
+		}),
 		...(migrations && { migrations }),
 		capnp_schema: capnpSchemaOutputFile,
 		...(keep_bindings && { keep_bindings }),
@@ -554,7 +556,7 @@ export function createWorkerUploadForm(worker: CfWorkerInit): FormData {
 		...(tail_consumers && { tail_consumers }),
 		...(limits && { limits }),
 		...(annotations && { annotations }),
-		...(experimental_assets_jwt && { assets: experimental_assets_jwt }),
+		...(experimental_assets && { assets: experimental_assets.jwt }),
 	};
 
 	if (bindings.unsafe?.metadata !== undefined) {

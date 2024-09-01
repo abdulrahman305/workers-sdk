@@ -1,5 +1,51 @@
 # create-cloudflare
 
+## 2.26.0
+
+### Minor Changes
+
+- [#6573](https://github.com/cloudflare/workers-sdk/pull/6573) [`3ff6506`](https://github.com/cloudflare/workers-sdk/commit/3ff6506cc5f1d79e5df6530673cb600507c7da1b) Thanks [@santraez](https://github.com/penalosa)! - feature: Use `create-vite` instead of `create-react-app` for React projects.
+
+  [React's documentation](https://react.dev/learn/start-a-new-react-project#can-i-use-react-without-a-framework) now recommends using `create-vite` over `create-react-app`, as the latter has been deprecated. To align with these best practices, React projects created with C3 will now use [Vite](https://vitejs.dev/).
+
+  With this change, the default development command will switch from using `create-react-app` to `create-vite`, providing a more modern and efficient development experience.
+
+  Additionally, selection of variants for React projects created by Vite has been added, allowing users to choose different configurations based on their needs. The test suite has also been adapted to accommodate the new configuration, ensuring all tests run without errors.
+
+## 2.25.2
+
+### Patch Changes
+
+- [#6557](https://github.com/cloudflare/workers-sdk/pull/6557) [`2e9aa53`](https://github.com/cloudflare/workers-sdk/commit/2e9aa53751c575128dc513dabc3878426a6f4c5a) Thanks [@edmundhung](https://github.com/edmundhung)! - fix: renamed the "Demo Application" category to "Application Starter"
+
+## 2.25.1
+
+### Patch Changes
+
+- [#6496](https://github.com/cloudflare/workers-sdk/pull/6496) [`3f229ce`](https://github.com/cloudflare/workers-sdk/commit/3f229ceb45e16d4d2b7ba611c12d0e8b4b7c9984) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency      | From   | To     |
+  | --------------- | ------ | ------ |
+  | @angular/create | 18.1.3 | 18.1.4 |
+
+- [#6501](https://github.com/cloudflare/workers-sdk/pull/6501) [`87c8f2d`](https://github.com/cloudflare/workers-sdk/commit/87c8f2dc702035106622628c5585c6c9d8166f67) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency        | From  | To    |
+  | ----------------- | ----- | ----- |
+  | create-docusaurus | 3.5.1 | 3.5.2 |
+
+- [#6523](https://github.com/cloudflare/workers-sdk/pull/6523) [`0c4d10a`](https://github.com/cloudflare/workers-sdk/commit/0c4d10a5f1b63c6b6a565e2f87a44b40fea503e0) Thanks [@dependabot](https://github.com/apps/dependabot)! - chore: update dependencies of "create-cloudflare" package
+
+  The following dependency versions have been updated:
+
+  | Dependency    | From  | To    |
+  | ------------- | ----- | ----- |
+  | create-svelte | 6.3.5 | 6.3.8 |
+
 ## 2.25.0
 
 ### Minor Changes

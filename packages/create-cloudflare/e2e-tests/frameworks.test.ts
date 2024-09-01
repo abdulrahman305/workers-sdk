@@ -287,12 +287,19 @@ const frameworkTests: Record<string, FrameworkTestConfig> = {
 		},
 	},
 	react: {
+		promptHandlers: [
+			{
+				matcher: /Select a variant:/,
+				input: [keys.enter],
+			},
+		],
 		testCommitMessage: true,
 		unsupportedOSs: ["win32"],
+		unsupportedPms: ["yarn"],
 		timeout: LONG_TIMEOUT,
 		verifyDeploy: {
 			route: "/",
-			expectedText: "React App",
+			expectedText: "Vite + React",
 		},
 	},
 	solid: {
@@ -356,6 +363,7 @@ const frameworkTests: Record<string, FrameworkTestConfig> = {
 			expectedText: "Vite App",
 		},
 		flags: ["--ts"],
+		quarantine: true,
 	},
 };
 

@@ -19,7 +19,7 @@ import {
 	createModuleCollector,
 	getWrangler1xLegacyModuleReferences,
 } from "../deployment-bundle/module-collection";
-import { validateNodeCompat } from "../deployment-bundle/node-compat";
+import { getNodeCompatMode } from "../deployment-bundle/node-compat";
 import { loadSourceMaps } from "../deployment-bundle/source-maps";
 import { confirm } from "../dialogs";
 import { getMigrationsToUpload } from "../durable";
@@ -36,9 +36,10 @@ import {
 	maybeRetrieveFileSourceMap,
 } from "../sourcemap";
 import type { Config } from "../config";
-import type { ExperimentalAssets, Rule } from "../config/environment";
+import type { Rule } from "../config/environment";
 import type { Entry } from "../deployment-bundle/entry";
 import type { CfPlacement, CfWorkerInit } from "../deployment-bundle/worker";
+import type { ExperimentalAssetsOptions } from "../experimental-assets";
 import type { RetrieveSourceMapFunction } from "../sourcemap";
 
 type Props = {
@@ -51,7 +52,7 @@ type Props = {
 	env: string | undefined;
 	compatibilityDate: string | undefined;
 	compatibilityFlags: string[] | undefined;
-	experimentalAssets: ExperimentalAssets | undefined;
+	experimentalAssetsOptions: ExperimentalAssetsOptions | undefined;
 	vars: Record<string, string> | undefined;
 	defines: Record<string, string> | undefined;
 	alias: Record<string, string> | undefined;
@@ -184,11 +185,13 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 
 	const minify = props.minify ?? config.minify;
 
-	const nodejsCompatMode = validateNodeCompat({
-		legacyNodeCompat: props.nodeCompat ?? config.node_compat ?? false,
-		compatibilityFlags: props.compatibilityFlags ?? config.compatibility_flags,
-		noBundle: props.noBundle ?? config.no_bundle ?? false,
-	});
+	const nodejsCompatMode = getNodeCompatMode(
+		props.compatibilityFlags ?? config.compatibility_flags,
+		{
+			nodeCompat: props.nodeCompat ?? config.node_compat,
+			noBundle: props.noBundle ?? config.no_bundle,
+		}
+	);
 
 	const compatibilityFlags =
 		props.compatibilityFlags ?? config.compatibility_flags;
@@ -347,13 +350,16 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 			: undefined;
 
 		// Upload assets if experimental assets is being used
-		const experimentalAssetsJwt: CfWorkerInit["experimental_assets_jwt"] =
-			props.experimentalAssets && !props.dryRun
-				? await syncExperimentalAssets(
-						accountId,
-						scriptName,
-						props.experimentalAssets.directory
-					)
+		const experimentalAssetsOptions =
+			props.experimentalAssetsOptions && !props.dryRun
+				? {
+						routingConfig: props.experimentalAssetsOptions?.routingConfig,
+						jwt: await syncExperimentalAssets(
+							accountId,
+							scriptName,
+							props.experimentalAssetsOptions.directory
+						),
+					}
 				: undefined;
 
 		const bindings: CfWorkerInit["bindings"] = {
@@ -421,7 +427,7 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 				"workers/message": props.message,
 				"workers/tag": props.tag,
 			},
-			experimental_assets_jwt: experimentalAssetsJwt,
+			experimental_assets: experimentalAssetsOptions,
 		};
 
 		await printBundleSize(
@@ -445,8 +451,6 @@ See https://developers.cloudflare.com/workers/platform/compatibility-dates for m
 				maskedVars[key] = "(hidden)";
 			}
 		}
-
-		printBindings({ ...withoutStaticAssets, vars: maskedVars });
 
 		if (props.dryRun) {
 			printBindings({ ...withoutStaticAssets, vars: maskedVars });
