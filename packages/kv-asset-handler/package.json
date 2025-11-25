@@ -41,12 +41,12 @@
 	},
 	"devDependencies": {
 		"@cloudflare/eslint-config-shared": "workspace:*",
-		"@cloudflare/vitest-pool-workers": "^0.7.0",
+		"@cloudflare/vitest-pool-workers": "^0.8.69",
 		"@cloudflare/workers-types": "catalog:default",
 		"@types/mime": "^3.0.4",
 		"@types/node": "catalog:default",
 		"eslint": "catalog:default",
-		"tsup": "8.3.0",
+		"tsup": "8.5.1",
 		"vitest": "~2.1.0"
 	},
 	"engines": {
